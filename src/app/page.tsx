@@ -132,11 +132,9 @@ function formatDayMonthWordYear(isoLike: string) {
 }
 
 export default function Home() {
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window === "undefined") return "dark";
-    const stored = localStorage.getItem("theme");
-    return stored === "light" || stored === "dark" ? stored : "dark";
-  });
+  // Fixed default on server + first client pass so SSR/static HTML matches hydration;
+  // real preference is applied in useLayoutEffect (localStorage).
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const toastTimerRef = useRef<number | null>(null);
   const filterNoticeTimerRef = useRef<number | null>(null);
   const tableNoticeTimerRef = useRef<number | null>(null);
@@ -165,8 +163,8 @@ export default function Home() {
 
   const [idSearch, setIdSearch] = useState("");
   const [dateRange, setDateRange] = useState<{ from_date: string; to_date: string }>({
-    from_date: todayYmd(),
-    to_date: todayYmd(),
+    from_date: "",
+    to_date: "",
   });
   const fromDateRef = useRef<HTMLInputElement | null>(null);
   const toDateRef = useRef<HTMLInputElement | null>(null);
@@ -236,7 +234,13 @@ export default function Home() {
   }, [deleteConfirm]);
 
   useLayoutEffect(() => {
-    // Apply theme before paint to avoid flash.
+    const stored = localStorage.getItem("theme");
+    if (stored === "light" || stored === "dark") {
+      setTheme(stored);
+    }
+  }, []);
+
+  useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
