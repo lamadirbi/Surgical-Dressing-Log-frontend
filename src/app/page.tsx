@@ -1,5 +1,6 @@
 "use client";
 
+import { PwaClient } from "@/components/PwaClient";
 import {
   ChevronLeft,
   ChevronRight,
@@ -55,20 +56,27 @@ function formatDdMmYyyy(isoLike: string) {
   return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}`;
 }
 
-function WwPill({ value }: { value: string | null }) {
-  const v = (value ?? "").trim();
-  if (!v) return <span className="text-zinc-400">—</span>;
-  const key = v.toLowerCase();
-  const isLab = key === "lab";
-  const isLap = key === "lap";
-  const cls = isLab
-    ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
-    : isLap
-      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
-      : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100";
+function WarBoolCell({ value }: { value: boolean }) {
   return (
-    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${cls}`}>
-      {v}
+    <span
+      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${
+        value
+          ? "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"
+          : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+      }`}
+    >
+      {value ? "Yes" : "No"}
+    </span>
+  );
+}
+
+function NotesPreview({ value }: { value: string | null }) {
+  const t = (value ?? "").trim();
+  if (!t) return <span className="text-zinc-400">—</span>;
+  const short = t.length > 56 ? `${t.slice(0, 56)}…` : t;
+  return (
+    <span title={t} className="block max-w-[220px] truncate text-left sm:max-w-[min(360px,40vw)]">
+      {short}
     </span>
   );
 }
@@ -99,12 +107,35 @@ type PendingCreate = {
     id_no: string;
     sex: Sex;
     age: number;
-    ww?: string;
+    ww: boolean;
+    notes: string;
   };
   created_at: string;
 };
 
 const PENDING_KEY = "pendingPatientCreates";
+
+function normalizePendingPayload(
+  p: PendingCreate["payload"] | Record<string, unknown>
+): PendingCreate["payload"] {
+  const o = p as Record<string, unknown>;
+  const id_no = String(o.id_no ?? "");
+  const sex = (o.sex === "F" ? "F" : "M") as Sex;
+  const age = typeof o.age === "number" ? o.age : Number(o.age);
+  const wwRaw = o.ww;
+  const notesRaw = o.notes;
+  let ww = false;
+  let notes = "";
+  if (typeof wwRaw === "boolean") {
+    ww = wwRaw;
+  } else if (typeof wwRaw === "string") {
+    const s = wwRaw.trim().toLowerCase();
+    if (s === "1" || s === "true" || s === "yes") ww = true;
+    else if (s !== "") notes = wwRaw;
+  }
+  if (typeof notesRaw === "string" && notesRaw.trim()) notes = notesRaw.trim();
+  return { id_no, sex, age: Number.isFinite(age) ? age : 0, ww, notes };
+}
 
 function readPending(): PendingCreate[] {
   if (typeof window === "undefined") return [];
@@ -112,7 +143,11 @@ function readPending(): PendingCreate[] {
     const raw = localStorage.getItem(PENDING_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as PendingCreate[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((row) => ({
+      ...row,
+      payload: normalizePendingPayload(row.payload),
+    }));
   } catch {
     return [];
   }
@@ -120,6 +155,22 @@ function readPending(): PendingCreate[] {
 
 function writePending(items: PendingCreate[]) {
   localStorage.setItem(PENDING_KEY, JSON.stringify(items));
+}
+
+/** Same calendar day as today (local), same trimmed id — blocks duplicate offline rows. */
+function pendingHasSameIdToday(idNo: string): boolean {
+  const day = todayYmd();
+  const target = idNo.trim();
+  for (const p of readPending()) {
+    if (p.payload.id_no.trim() !== target) continue;
+    const d = new Date(p.created_at);
+    if (isNaN(d.getTime())) continue;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    if (`${y}-${m}-${dd}` === day) return true;
+  }
+  return false;
 }
 
 function formatDayMonthWordYear(isoLike: string) {
@@ -147,7 +198,8 @@ export default function Home() {
     id_no: string;
     sex: Sex;
     age: string;
-    ww: string;
+    ww: boolean;
+    notes: string;
   }>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<null | { id: number; idNo: string }>(null);
@@ -158,7 +210,8 @@ export default function Home() {
     id_no: "",
     sex: "M" as Sex,
     age: "",
-    ww: "",
+    ww: false,
+    notes: "",
   });
 
   const [idSearch, setIdSearch] = useState("");
@@ -187,13 +240,14 @@ export default function Home() {
     id_no: string;
     sex: Sex;
     age: string;
-    ww: string;
+    ww: boolean;
+    notes: string;
   }>(null);
   const [pendingSaving, setPendingSaving] = useState(false);
   const [page, setPage] = useState(1);
   const pageSize = 10;
   const [sort, setSort] = useState<{
-    key: "id_no" | "sex" | "age" | "created_at" | "ww";
+    key: "id_no" | "sex" | "age" | "created_at" | "ww" | "notes";
     dir: "asc" | "desc";
   }>({ key: "created_at", dir: "desc" });
 
@@ -271,6 +325,14 @@ export default function Home() {
       setPage(1);
       return data;
     } catch (e) {
+      setPatients([]);
+      setTotalPatients(null);
+      if (e instanceof TypeError) {
+        setError(
+          "No server connection. The app works; new entries can be saved offline and will sync when online."
+        );
+        return null;
+      }
       const msg = e instanceof Error ? e.message : "Failed to load data";
       setError(msg);
       showToast("error", msg);
@@ -307,8 +369,7 @@ export default function Home() {
         await createPatient(item.payload);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "";
-        // If patient already exists on server, drop it from queue.
-        if (msg.includes("Patient already exists") || msg.includes("409")) {
+        if (msg.includes("already registered today")) {
           continue;
         }
         remaining.push(item);
@@ -373,13 +434,21 @@ export default function Home() {
         return;
       }
 
-      const existing = await listPatients({ id_no: idNo });
-      if (existing.length > 0) {
-        setIdSearch(idNo);
-        setFiltersApplied(true);
-        await refresh();
-        showToast("error", "Patient already exists.");
+      if (pendingHasSameIdToday(idNo)) {
+        showToast("error", "This ID is already saved for today (pending offline list).");
         return;
+      }
+
+      if (typeof navigator !== "undefined" && navigator.onLine) {
+        try {
+          const dupToday = await listPatients({ id_no_exact: idNo, date: todayYmd() });
+          if (dupToday.length > 0) {
+            showToast("error", "This ID number is already registered today.");
+            return;
+          }
+        } catch {
+          /* server unreachable — backend will enforce when online */
+        }
       }
 
       const ageRaw = form.age.trim();
@@ -397,6 +466,7 @@ export default function Home() {
         sex: form.sex,
         age: ageNum,
         ww: form.ww,
+        notes: form.notes.trim(),
       };
 
       if (typeof window !== "undefined" && !navigator.onLine) {
@@ -406,13 +476,19 @@ export default function Home() {
         ];
         writePending(next);
         setPendingCount(next.length);
-        setForm((p) => ({ ...p, id_no: "", age: "", ww: "" }));
+        setForm((p) => ({ ...p, id_no: "", age: "", ww: false, notes: "" }));
         showToast("success", "Saved offline. Will sync when online.");
         return;
       }
 
       try {
-        await createPatient(payload);
+        await createPatient({
+          id_no: payload.id_no,
+          sex: payload.sex,
+          age: payload.age,
+          ww: payload.ww,
+          notes: payload.notes || null,
+        });
       } catch (e) {
         // Network failure → queue for later
         if (e instanceof TypeError || !navigator.onLine) {
@@ -422,13 +498,13 @@ export default function Home() {
           ];
           writePending(next);
           setPendingCount(next.length);
-          setForm((p) => ({ ...p, id_no: "", age: "", ww: "" }));
+          setForm((p) => ({ ...p, id_no: "", age: "", ww: false, notes: "" }));
           showToast("success", "Saved offline. Will sync when online.");
           return;
         }
         throw e;
       }
-      setForm((p) => ({ ...p, id_no: "", age: "", ww: "" }));
+      setForm((p) => ({ ...p, id_no: "", age: "", ww: false, notes: "" }));
       await refresh();
       showToast("success", "Patient saved successfully.");
     } catch (err) {
@@ -464,6 +540,7 @@ export default function Home() {
       const av = a[sort.key];
       const bv = b[sort.key];
       if (sort.key === "age") return (Number(av) - Number(bv)) * dirMul;
+      if (sort.key === "ww") return (Number(av) - Number(bv)) * dirMul;
       if (sort.key === "created_at") {
         return (new Date(String(av)).getTime() - new Date(String(bv)).getTime()) * dirMul;
       }
@@ -531,6 +608,7 @@ export default function Home() {
   return (
     <div className="min-h-full flex-1 bg-zinc-50 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+        <PwaClient />
         {pendingEditing ? (
           <div
             className="fixed inset-0 z-60 flex items-center justify-center p-4"
@@ -603,17 +681,30 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="mt-3">
-                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                  Notes/WW
-                </label>
-                <textarea
-                  value={pendingEditing.ww}
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  id="pending-ww"
+                  type="checkbox"
+                  checked={pendingEditing.ww}
                   onChange={(e) =>
-                    setPendingEditing((p) => (p ? { ...p, ww: e.target.value } : p))
+                    setPendingEditing((p) => (p ? { ...p, ww: e.target.checked } : p))
+                  }
+                  className="h-4 w-4 rounded border-zinc-300 text-slate-600 focus:ring-slate-500 dark:border-zinc-600 dark:bg-zinc-950"
+                />
+                <label htmlFor="pending-ww" className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                  WW
+                </label>
+              </div>
+
+              <div className="mt-3">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Notes</label>
+                <textarea
+                  value={pendingEditing.notes}
+                  onChange={(e) =>
+                    setPendingEditing((p) => (p ? { ...p, notes: e.target.value } : p))
                   }
                   className="mt-1 min-h-[96px] w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none shadow-sm focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-                  placeholder="Type / notes"
+                  placeholder="Optional notes"
                 />
               </div>
 
@@ -663,7 +754,8 @@ export default function Home() {
                                 id_no: idNo,
                                 sex: pendingEditing.sex,
                                 age: ageNum,
-                                ww: pendingEditing.ww.trim(),
+                                ww: pendingEditing.ww,
+                                notes: pendingEditing.notes.trim(),
                               },
                             }
                           : x
@@ -742,9 +834,11 @@ export default function Home() {
                   <table className="w-full border-separate border-spacing-0 text-xs">
                     <thead>
                       <tr className="text-left font-semibold text-zinc-700 dark:text-zinc-200">
+                        <th className="bg-zinc-100 px-3 py-2 text-center dark:bg-zinc-800/60">#</th>
                         <th className="bg-zinc-100 px-3 py-2 dark:bg-zinc-800/60">ID No</th>
                         <th className="bg-zinc-100 px-3 py-2 dark:bg-zinc-800/60">Sex</th>
                         <th className="bg-zinc-100 px-3 py-2 dark:bg-zinc-800/60">Age</th>
+                        <th className="bg-zinc-100 px-3 py-2 dark:bg-zinc-800/60">WW</th>
                         <th className="bg-zinc-100 px-3 py-2 dark:bg-zinc-800/60">Notes</th>
                         <th className="bg-zinc-100 px-3 py-2 dark:bg-zinc-800/60">Saved at</th>
                         <th className="bg-zinc-100 px-3 py-2 text-right dark:bg-zinc-800/60">
@@ -753,12 +847,20 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pendingItems.map((it) => (
+                      {pendingItems.map((it, idx) => (
                         <tr key={it.id} className="border-t border-zinc-200 dark:border-zinc-800">
+                          <td className="px-3 py-2 text-center tabular-nums text-zinc-500 dark:text-zinc-400">
+                            {idx + 1}
+                          </td>
                           <td className="px-3 py-2 font-medium">{it.payload.id_no}</td>
                           <td className="px-3 py-2">{it.payload.sex}</td>
                           <td className="px-3 py-2">{it.payload.age}</td>
-                          <td className="px-3 py-2">{it.payload.ww ?? ""}</td>
+                          <td className="px-3 py-2">
+                            <WarBoolCell value={it.payload.ww} />
+                          </td>
+                          <td className="px-3 py-2 max-w-[140px] truncate" title={it.payload.notes}>
+                            {it.payload.notes || "—"}
+                          </td>
                           <td className="px-3 py-2">{it.created_at}</td>
                           <td className="px-3 py-2">
                             <div className="flex justify-end gap-2">
@@ -770,7 +872,8 @@ export default function Home() {
                                     id_no: it.payload.id_no,
                                     sex: it.payload.sex,
                                     age: String(it.payload.age),
-                                    ww: it.payload.ww ?? "",
+                                    ww: it.payload.ww,
+                                    notes: it.payload.notes ?? "",
                                   })
                                 }
                                 className="rounded-md p-1 transition-colors hover:bg-zinc-100 active:bg-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
@@ -868,15 +971,30 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="mt-3">
-                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                  Notes/WW
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  id="edit-ww"
+                  type="checkbox"
+                  checked={editing.ww}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, ww: e.target.checked } : p))
+                  }
+                  className="h-4 w-4 rounded border-zinc-300 text-slate-600 focus:ring-slate-500 dark:border-zinc-600 dark:bg-zinc-950"
+                />
+                <label htmlFor="edit-ww" className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                  WW
                 </label>
+              </div>
+
+              <div className="mt-3">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Notes</label>
                 <textarea
-                  value={editing.ww}
-                  onChange={(e) => setEditing((p) => (p ? { ...p, ww: e.target.value } : p))}
+                  value={editing.notes}
+                  onChange={(e) =>
+                    setEditing((p) => (p ? { ...p, notes: e.target.value } : p))
+                  }
                   className="mt-1 min-h-[96px] w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none shadow-sm focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-                  placeholder="Type / notes"
+                  placeholder="Optional notes"
                 />
               </div>
 
@@ -914,7 +1032,8 @@ export default function Home() {
                         id_no: idNo,
                         sex: editing.sex,
                         age: ageNum,
-                        ww: editing.ww.trim() ? editing.ww.trim() : null,
+                        ww: editing.ww,
+                        notes: editing.notes.trim() ? editing.notes.trim() : null,
                       });
                       setEditing(null);
                       await refresh();
@@ -1094,15 +1213,28 @@ export default function Home() {
                   </div>
                 </div>
 
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    id="form-ww"
+                    type="checkbox"
+                    checked={form.ww}
+                    onChange={(e) => setForm((p) => ({ ...p, ww: e.target.checked }))}
+                    className="h-4 w-4 rounded border-zinc-300 text-slate-600 focus:ring-slate-500 dark:border-zinc-600 dark:bg-zinc-950"
+                  />
+                  <label htmlFor="form-ww" className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                    WW
+                  </label>
+                </div>
+
                 <div>
                   <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                    WW (optional)
+                    Notes (optional)
                   </label>
                   <textarea
-                    value={form.ww}
-                    onChange={(e) => setForm((p) => ({ ...p, ww: e.target.value }))}
+                    value={form.notes}
+                    onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
                     className="mt-1 min-h-[84px] w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none shadow-sm focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-                    placeholder="Type / notes"
+                    placeholder="Optional notes"
                   />
                 </div>
 
@@ -1397,6 +1529,9 @@ export default function Home() {
                 <table className="w-full border-separate border-spacing-0">
                   <thead>
                     <tr className="text-left text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                      <th className="sticky top-0 w-[56px] bg-zinc-100 px-2 py-2 text-center dark:bg-zinc-800/60 sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
+                        #
+                      </th>
                       <th className="sticky top-0 bg-zinc-100 px-2 py-2 dark:bg-zinc-800/60 sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
                         <button
                           type="button"
@@ -1424,10 +1559,20 @@ export default function Home() {
                           Age <span className="text-zinc-400">⇅</span>
                         </button>
                       </th>
-                      <th className="sticky top-0 w-[84px] bg-zinc-100 px-2 py-2 dark:bg-zinc-800/60 sm:w-[96px] sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
+                      <th className="sticky top-0 w-[72px] bg-zinc-100 px-2 py-2 dark:bg-zinc-800/60 sm:w-[80px] sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
                         <button
                           type="button"
                           onClick={() => toggleSort("ww")}
+                          className="inline-flex items-center gap-1"
+                          title="WW"
+                        >
+                          WW <span className="text-zinc-400">⇅</span>
+                        </button>
+                      </th>
+                      <th className="sticky top-0 min-w-[100px] bg-zinc-100 px-2 py-2 dark:bg-zinc-800/60 sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
+                        <button
+                          type="button"
+                          onClick={() => toggleSort("notes")}
                           className="inline-flex items-center gap-1"
                         >
                           Notes <span className="text-zinc-400">⇅</span>
@@ -1448,12 +1593,16 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody className="text-xs sm:text-sm">
-                    {pagedPatients.map((p) => {
+                    {pagedPatients.map((p, idx) => {
+                      const serial = (safePage - 1) * pageSize + idx + 1;
                       return (
                         <tr
                           key={p.id}
                           className="border-t border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
                         >
+                          <td className="w-[56px] px-2 py-2 align-top text-center tabular-nums text-zinc-500 sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800 dark:text-zinc-400">
+                            {serial}
+                          </td>
                           <td className="px-2 py-2 align-top font-medium sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
                             {p.id_no}
                           </td>
@@ -1465,8 +1614,11 @@ export default function Home() {
                           <td className="px-2 py-2 align-top sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
                             {p.age}
                           </td>
-                          <td className="w-[84px] px-2 py-2 align-top sm:w-[96px] sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
-                            <WwPill value={p.ww} />
+                          <td className="w-[72px] px-2 py-2 align-top sm:w-[80px] sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
+                            <WarBoolCell value={Boolean(p.ww)} />
+                          </td>
+                          <td className="min-w-[100px] px-2 py-2 align-top sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
+                            <NotesPreview value={p.notes ?? null} />
                           </td>
                           <td className="w-[84px] px-2 py-2 align-top sm:w-[104px] sm:px-4 sm:py-3 border-r border-zinc-200 dark:border-zinc-800">
                             <div className="flex justify-end gap-2 whitespace-nowrap text-zinc-700 dark:text-zinc-200">
@@ -1478,7 +1630,8 @@ export default function Home() {
                                     id_no: p.id_no ?? "",
                                     sex: p.sex,
                                     age: String(p.age ?? ""),
-                                    ww: p.ww ?? "",
+                                    ww: Boolean(p.ww),
+                                    notes: p.notes ?? "",
                                   });
                                 }}
                                 title="Edit"
@@ -1508,7 +1661,7 @@ export default function Home() {
                     {!loading && pagedPatients.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={6}
+                          colSpan={8}
                           className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400"
                         >
                           No rows found for the current filters.
@@ -1588,6 +1741,18 @@ export default function Home() {
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="mt-8 border-t border-zinc-200 pt-4 text-center text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+          <div className="font-medium text-zinc-700 dark:text-zinc-300">
+            المهندسة لما أحمد الدربي
+          </div>
+          <a
+            className="mt-1 inline-flex items-center justify-center underline underline-offset-4 hover:text-zinc-900 dark:hover:text-zinc-100"
+            href="mailto:lamaadirbi@gmail.com"
+          >
+            lamaadirbi@gmail.com
+          </a>
         </div>
       </div>
     </div>

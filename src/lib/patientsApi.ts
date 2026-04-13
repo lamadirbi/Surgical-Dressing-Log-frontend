@@ -7,17 +7,33 @@ export type Patient = {
   id_no: string;
   sex: Sex;
   age: number;
-  ww: string | null;
+  ww: boolean;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 };
 
 export type PatientFilters = {
   id_no?: string;
+  /** Exact match (no partial/LIKE) — use with `date` for same-day duplicate checks */
+  id_no_exact?: string;
   date?: string;
   from_date?: string;
   to_date?: string;
 };
+
+function errorMessageFromResponseBody(text: string, fallback: string): string {
+  const t = text.trim();
+  if (t.startsWith("{")) {
+    try {
+      const j = JSON.parse(t) as { message?: string };
+      if (j.message && typeof j.message === "string") return j.message;
+    } catch {
+      /* ignore */
+    }
+  }
+  return t || fallback;
+}
 
 function toQueryString(filters: PatientFilters) {
   const params = new URLSearchParams();
@@ -46,7 +62,8 @@ export async function createPatient(input: {
   id_no: string;
   sex: Sex;
   age: number;
-  ww?: string;
+  ww?: boolean;
+  notes?: string | null;
 }) {
   const res = await fetch(`${API_BASE_URL}/patients`, {
     method: "POST",
@@ -55,12 +72,13 @@ export async function createPatient(input: {
       id_no: input.id_no,
       sex: input.sex,
       age: input.age,
-      ww: input.ww?.trim() ? input.ww.trim() : null,
+      ww: input.ww ?? false,
+      notes: input.notes?.trim() ? input.notes.trim() : null,
     }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `Request failed (${res.status})`);
+    throw new Error(errorMessageFromResponseBody(text, `Request failed (${res.status})`));
   }
   const json = (await res.json()) as { data: Patient };
   return json.data;
@@ -94,7 +112,8 @@ export async function updatePatient(
     id_no: string;
     sex: Sex;
     age: number;
-    ww: string | null;
+    ww: boolean;
+    notes: string | null;
   }>
 ) {
   const res = await fetch(`${API_BASE_URL}/patients/${id}`, {
@@ -104,7 +123,7 @@ export async function updatePatient(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `Request failed (${res.status})`);
+    throw new Error(errorMessageFromResponseBody(text, `Request failed (${res.status})`));
   }
   const json = (await res.json()) as { data: Patient };
   return json.data;
@@ -119,4 +138,3 @@ export async function deletePatient(id: number) {
     throw new Error(text || `Request failed (${res.status})`);
   }
 }
-
